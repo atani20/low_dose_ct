@@ -18,44 +18,53 @@ def get_patient_pixels(patient_path):
     return np.array(image, dtype=np.int16)
 
 
-def extract_patches(nd_image, ld_image, patch_size, stride=32, skip_images=30):
-    images_num, h, w = ld_image.shape
-    images_num //= skip_images
-    out_ld = np.empty((0, patch_size, patch_size))
-    out_nd = np.empty((0, patch_size, patch_size))
-    sz = ld_image.itemsize
-    shape = ((h - patch_size) // stride + 1, (w - patch_size) // stride + 1, patch_size, patch_size)
-    strides = sz * np.array([w * stride, stride, w, 1])
-    images_idxs = random.sample(range(1, ld_image.shape[0]), images_num)
-    for d, idx in enumerate(images_idxs):
-        ld_patches = np.lib.stride_tricks.as_strided(ld_image[idx, :, :], shape=shape, strides=strides)
-        ld_blocks = ld_patches.reshape(-1, patch_size, patch_size)
-        out_ld = np.concatenate((out_ld, ld_blocks[:, :, :]))
-        nd_patches = np.lib.stride_tricks.as_strided(nd_image[idx, :, :], shape=shape, strides=strides)
-        nd_blocks = nd_patches.reshape(-1, patch_size, patch_size)
-        out_nd = np.concatenate((out_nd, nd_blocks[:, :, :]))
-    return out_nd[:, :, :],out_ld[:, :, :]
+def extract_patches(full_images, low_images, patch_size, alpha=0.5, patient_shuffle=True, patch_shuffle=True):
+    images_num, size, size1 = low_images.shape
+    full_out = np.empty((0, patch_size, patch_size), dtype='int16')
+    low_out = np.empty((0, patch_size, patch_size), dtype='int16')
+    images_idxs = np.random.permutation(np.arange(images_num)) if patient_shuffle else np.arange(images_num)
+    n = size // patch_size
+    k = 0
+    for idx in images_idxs:
+        full_img = full_images[idx, :, :]
+        low_img = low_images[idx, :, :]
+        full_patches = np.empty((0, patch_size, patch_size), dtype='int16')
+        low_patches = np.empty((0, patch_size, patch_size), dtype='int16')
+
+        patch_idxs1 = np.random.permutation(np.arange(n)) if patch_shuffle else np.arange(n)
+        patch_idxs2 = np.random.permutation(np.arange(n)) if patch_shuffle else np.arange(n)
+        for i in patch_idxs1:
+            for j in patch_idxs2:
+                full_patch = full_img[i*patch_size: (i+1)*patch_size, j*patch_size: (j+1)*patch_size]
+                if np.all(full_patch <= 250):
+                    if np.random.uniform(0, 1) < alpha:
+                        k += 1
+                        continue
+                full_patches = np.concatenate((full_patches, np.reshape(full_patch, (1,) + full_patch.shape)))
+
+                low_patch = low_img[i*patch_size: (i+1)*patch_size, j*patch_size: (j+1)*patch_size]
+                low_patches = np.concatenate((low_patches, np.reshape(low_patch, (1,) + low_patch.shape)))
+                
+        full_out = np.concatenate((full_out, full_patches))
+        low_out = np.concatenate((low_out, low_patches))
+    print(k)
+    return full_out, low_out
 
 
 # создание датасета, режем на кусочки размера patch_size
-def preproc_patient(path, patch_size):
-    full_patches = np.empty((0, patch_size, patch_size))
-    low_patches = np.empty((0, patch_size, patch_size))
-    for patient in os.listdir(path)[0:10]:
+def dataset_prerprocessing(path, patch_size):
+    for patient in os.listdir(path):
         doses = os.listdir(os.path.join(path, patient))
         full_pixels = get_patient_pixels(os.path.join(path, patient, doses[0]))
         low_pixels = get_patient_pixels(os.path.join(path, patient, doses[1]))
-        full, low = extract_patches(full_pixels, low_pixels, patch_size)
-        full_patches = np.concatenate((full_patches, full))
-        low_patches = np.concatenate((low_patches, low))
-        print(patient)
-    print(full_patches.shape)
-    return full_patches, low_patches
+        full_patches, low_patches = extract_patches(full_pixels, low_pixels, patch_size)
+        filename = os.path.join(config.preproc_data, patient + '.h5py')
+        with h5py.File(filename, 'a') as f:
+            f.create_dataset('low', data=full_patches)
+            f.create_dataset('full', data=low_patches)
+        del full_patches
+        del low_patches
 
 
 if __name__ == "__main__":
-    full, low = preproc_patient(config.data_dir, config.patch_size)
-    filename = os.path.join(config.preproc_data_dir, 'ldct_10_p.h5')
-    with h5py.File(filename, 'a') as f:
-        f.create_dataset('low', data=low) 
-        f.create_dataset('full', data=full)
+    dataset_prerprocessing(config.data_dir, config.patch_size)
