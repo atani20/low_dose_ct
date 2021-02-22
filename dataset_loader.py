@@ -1,6 +1,7 @@
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset
+import glob
 import h5py
-import numpy as np
+import os
 
 
 class LowCTDataset(Dataset):
@@ -26,7 +27,11 @@ class LowCTDataset(Dataset):
         return x, y
 
 
-def get_data_loader(dataset_path, batch_size=32, num_workers=0, transforms=None):
-    data = LowCTDataset(dataset_path, transforms)
+def get_data_loader(dataset_path, batch_size=32, inx_from=0, indx_to=45, num_workers=0, transforms=None):
+    dataset_files = glob.glob(os.path.join(os.path.abspath(dataset_path), "*.h5py"))[inx_from:indx_to]
+    datasets = []
+    for file in dataset_files:
+        datasets.append(LowCTDataset(os.path.join(dataset_path, file), transforms))
+    data = ConcatDataset(datasets)
     data_loader = DataLoader(dataset=data, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return data_loader
