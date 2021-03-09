@@ -19,6 +19,8 @@ def get_patient_pixels(patient_path):
     image[image == padding] = 0
     return np.array(image, dtype=np.int16)
 
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 def extract_patches(full_images, low_images, patch_size, alpha=0.5, patient_shuffle=True, patch_shuffle=True):
     assert 0 <= alpha <= 1
@@ -52,26 +54,28 @@ def extract_patches(full_images, low_images, patch_size, alpha=0.5, patient_shuf
 
                 low_patch = low_img[i*patch_size: (i+1)*patch_size, j*patch_size: (j+1)*patch_size]
                 low_patches = np.concatenate((low_patches, np.reshape(low_patch, (1,) + low_patch.shape)))
-                
         full_out = np.concatenate((full_out, full_patches))
         low_out = np.concatenate((low_out, low_patches))
     return full_out, low_out
 
 
+
 def dataset_prerprocessing(path, patch_size):
+
     assert os.path.isdir(path)
     patient_list = os.listdir(path)
     bar = IncrementalBar('Patient', max=len(patient_list))
-    for patient in patient_list:
+    for patient in patient_list[20:]:
         bar.next()
         doses = os.listdir(os.path.join(path, patient))
         full_pixels = get_patient_pixels(os.path.join(path, patient, doses[0]))
         low_pixels = get_patient_pixels(os.path.join(path, patient, doses[1]))
+        # print(full_pixels.shape)
         full_patches, low_patches = extract_patches(full_pixels, low_pixels, patch_size)
         filename = os.path.join(config.preproc_data, patient + '.h5py')
         with h5py.File(filename, 'a') as f:
-            f.create_dataset('low', data=full_patches)
-            f.create_dataset('full', data=low_patches)
+            f.create_dataset('full', data=full_patches)
+            f.create_dataset('low', data=low_patches)
         del full_patches
         del low_patches
     bar.finish()
