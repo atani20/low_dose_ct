@@ -1,6 +1,6 @@
-data_dir = './LDCT-and-Projection-data'
-preproc_data = './dataset'
+data_dir = 'C:/Users/ACER/Desktop/диплом/DataSet/LDCT-and-Projection-data'
+preproc_data = 'C:/Users/ACER/Desktop/диплом/low_dose_ct/dataset'
 result_dir ='./result'
-mode = 'test'
+mode = 'train'
 patch_size = 55
 lr = 0.0001
