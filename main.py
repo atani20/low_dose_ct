@@ -22,11 +22,49 @@ def format_time(seconds):
     else:              return '%dd %02dh %02dm'    % (s // (24*60*60), (s // (60*60)) % 24, (s // 60) % 60)
 
 
-def save_current_result(save_path, network, iter, train_losses):
-    f = os.path.join(save_path, f'network_{iter}.pkl')
-    torch.save(network.state_dict(), f)
-    np.save(os.path.join(save_path, f'loss_{iter}.npy'), np.array(train_losses))
+def save_current_result(save_path, network, iter, train_losses, test_loss_x, test_loss_y):
+    zeros = 15
+    iter_str = str(iter).zfill(zeros - len(str(iter)))
+    # for kaggle only
 
+    # def save_to_google(name, path, fid='1C4l9TsB0Hh1ZjaWDy4iTQKMy6PnxWZUM'):
+    #     file = drive.CreateFile({'title': name, "parents": [{'id': fid}]})
+    #     file.SetContentFile(path)
+    #     file.Upload()
+    name = 'network_' + iter_str + '.pkl'
+    path = os.path.join(save_path, name)
+    torch.save(network.state_dict(), path)
+    # save_to_google(name, path)
+
+    name = 'loss_' + iter_str + '.npy'
+    path = os.path.join(save_path, name)
+    np.save(path, np.array(train_losses))
+    # save_to_google(name, path)
+
+    name = 'test_loss_x' + iter_str + '.npy'
+    path = os.path.join(save_path, name)
+    np.save(path, np.array(test_loss_x))
+    # save_to_google(name, path)
+
+    name = 'test_loss_y' + iter_str + '.npy'
+    path = os.path.join(save_path, name)
+    np.save(path, np.array(test_loss_y))
+    # save_to_google(name, path)
+
+
+def get_test_loss(network, data_loader, device):
+    results = []
+    with torch.no_grad():
+        for i, (x, y) in enumerate(data_loader):
+            x = x.float().to(device)
+            y = y.float().to(device)
+            pred = network(x)
+            size = x.size()[2]
+
+            # y = y.detach().cpu().numpy().reshape((size, -1))
+            # pred = pred.detach().cpu().numpy().reshape((size, -1))
+            results.append(metrics.get_mse(pred, y))
+    return sum(results) / len(data_loader)
 
 def train(network,
           data_loader,
@@ -35,12 +73,16 @@ def train(network,
           lr,
           device,
           save_path,
-          decay_iters=3000,
-          num_epochs=1000,
-          print_iter=20,
-          network_snapshot_iter=100):
+          decay_iters=500,
+          num_epochs=100,
+          print_iter=100,
+          network_snapshot_iter=100,
+          iter_to_test=1000,
+          data_loader_test=None):
     train_losses = []
     total_iters = 0
+    test_loss_x = []
+    test_loss_y = []
     start_time = time.time()
     for epoch in range(1, num_epochs):
         network.train(True)
@@ -57,12 +99,17 @@ def train(network,
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
+            # test
+            if total_iters % iter_to_test == 0 and data_loader_test is not None:
+                res = get_test_loss(network, data_loader_test, device)
+                test_loss_x.append(total_iters)
+                test_loss_y.append(res)
 
             # save
             if total_iters % network_snapshot_iter == 0:
                 save_current_result(save_path, network, total_iters, train_losses)
 
-            # print and pictures
+            # print
             if total_iters % print_iter == 0:
                 print('total_iters %-4d epoch %-4d loss %-0.6f total_time ' % (
                         total_iters, epoch, loss.item()),  format_time(time.time() - start_time))
@@ -73,54 +120,42 @@ def train(network,
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
 
-def save_metrics(original, predict, dir_to_save):
-    filename = os.path.join(dir_to_save, 'all_metrics.hp5y')
-    with h5py.File(filename, 'a') as f:
-        f.create_dataset('original_psnr', data=original[0])
-        f.create_dataset('original_ssim', data=original[1])
-        f.create_dataset('original_rmse', data=original[2])
 
-        f.create_dataset('predict_psnr', data=predict[0])
-        f.create_dataset('predict_ssim', data=predict[1])
-        f.create_dataset('predict_rmse', data=predict[2])
-
-    n = len(original[0])
-    filename = os.path.join(dir_to_save, 'metrics.txt')
-    with open(filename, 'w') as f:
-        f.write(f'Original: \n PSNR avg: {sum(original[0]) / n :5.f} \n '
-                f'SSIM avg: {sum(original[1]) / n:.5f} \nRMSE avg: {sum(original[2]) / n:.5f}\n\n')
-
-        f.write(f'Predict: \n PSNR avg: {sum(predict[0]) / n :5.f} \n '
-                f'SSIM avg: {sum(predict[1]) / n:.5f} \nRMSE avg: {sum(predict[2]) / n:.5f}\n\n')
-
-def test(network, data_loader, device, dir_to_save):
+def test_single(network, data_loader, device):
     # PSNR, SSIM, RMSE
-    original_psnr, original_ssim, original_rmse = [], [], []
-    predict_psnr, predict_ssim, predict_rmse = [], [], []
+    psnr_all, ssim_all, rmse_all = [], [], []
     with torch.no_grad():
         for i, (x, y) in enumerate(data_loader):
             x = x.float().to(device)
             y = y.float().to(device)
+
             pred = network(x)
+            predict_result = metrics.get_metrics(y, pred)
 
-            original_result, predict_result = metrics.get_metrics(x, y, pred)
-            original_psnr.append(original_result[0])
-            original_ssim.append(original_result[1])
-            original_rmse.append(original_result[2])
-
-            predict_psnr.append(predict_result[0])
-            predict_ssim.append(predict_result[1])
-            predict_rmse.append(predict_result[2])
-        original = (original_psnr, original_ssim, original_rmse)
-        predict = (predict_psnr, predict_ssim, predict_rmse)
-        save_metrics(original, predict, dir_to_save)
+            psnr_all.append(predict_result[0])
+            ssim_all.append(predict_result[1])
+            rmse_all.append(predict_result[2])
         n = len(data_loader)
+        return sum(psnr_all) / n, sum(ssim_all) / n, sum(rmse_all) / n
 
 
+def test_all(directory, data_loader, device):
+    files = glob.glob(os.path.join(directory, 'network_*.pkl'))
+    with open('result.csv', 'w') as f:
+        f.write(f'netw_num \t PSNR avg \t SSIM avg \tRMSE avg \n')
+        print(f'netw_num \t PSNR avg \t SSIM avg \tRMSE avg \n')
+        for file in files:
+            netw_num = int(file.split('.')[-2][-7:])
+            network.load_state_dict(torch.load(file))
+            network.eval()
+            predict = test_single(network, data_loader, device)
+
+            f.write(f'{netw_num: 10d}\t{predict[0]:.6f}\t{predict[1]:.6f}\t{predict[2]:.6f}\n')
+            print(f'{netw_num: 10d}\t{predict[0]:.6f}\t{predict[1]:.6f}\t{predict[2]:.6f}\n')
 
 
 def get_network_pkl_path():
-    snapshots = glob.glob(os.path.join(os.path.abspath(config.result_dir), "redcnn_*.pkl"))
+    snapshots = glob.glob(os.path.join(os.path.abspath(config.result_dir), "network_*.pkl"))
     if len(snapshots) == 0:
         return None
     return snapshots[-1]
@@ -135,16 +170,19 @@ if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     network.to(device)
 
+    data_loader_test = get_data_loader(os.path.abspath(config.preproc_data), inx_from=45, indx_to=50, batch_size=64)
     if config.mode == 'train':
+        print('Start training...')
         data_loader_train = get_data_loader(os.path.abspath(config.preproc_data))
-        lr = config.lr
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(network.parameters(), lr)
+        optimizer = optim.Adam(network.parameters(), config.lr)
         train(network=network, data_loader=data_loader_train, optimizer=optimizer, criterion=criterion,
-            lr=lr, device=device, save_path=config.result_dir)
+              lr=config.lr, device=device, save_path=config.result_dir, data_loader_test=data_loader_test)
+        print('End training.')
 
     elif config.mode == 'test':
-        data_loader_test = get_data_loader(os.path.abspath(config.preproc_data), inx_from=45, indx_to=50, batch_size=1)
-        test(network, data_loader_test, device, dir_to_save=config.result_dir)
+        print('Start test...')
+        test_all('C:/Users/ACER/Desktop/диплом/low_dose_ct/result', data_loader_test, device)
+        print('End test.')
     else:
         print('Unknown mode:', config.mode)
